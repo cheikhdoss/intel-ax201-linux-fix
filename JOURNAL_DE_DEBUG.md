@@ -199,3 +199,30 @@ Puis, conformément au souhait de l'utilisateur de conserver le choix manuel, no
 4. `/etc/systemd/system/wifi-autoheal.timer` : Surveillance toutes les 30s
 5. `/etc/default/grub` : Boot automatique verrouillé sur Linux LTS 6.17
 6. Microcode officiel amont `77.563a6e92.0` déployé dans `/lib/firmware/intel/iwlwifi/`
+
+---
+
+## 11. Le Piège du Band Steering 802.11v et du D3hot NoSoftRst
+
+### Le Décrochage Forcé sur la Bande 2.4 GHz
+L'analyse des journaux de wpa_supplicant a révélé le comportement insidieux des box Orange Flybox E940 :
+Lorsque le client se connecte au SSID 2.4 GHz, la box émet des trames 802.11v BSS Transition Management (WNM: Preferred List Available) pour forcer l'expulsion (Band Steering) du client vers le 5 GHz.
+Par défaut sous Linux, wpa_supplicant obéit aveuglément à la requête et initie une déconnexion volontaire :
+\`\`\`text
+wlp0s20f3: deauthenticating from 82:82:92:40:e9:a3 by local choice (Reason: 3=DEAUTH_LEAVING)
+\`\`\`
+Cette déconnexion abrupte en pleine transmission d'agrégats A-MPDU fait paniquer les files d'attente RX du microcode Intel, entraînant un timeout I/O (-5, -EIO) et la mise hors service du contrôleur par mac80211.
+
+### La Parade 802.11v (disable_btm=1)
+En configurant disable_btm=1 dans /etc/wpa_supplicant/wpa_supplicant.conf et en passant ce fichier au service systemd via /etc/systemd/system/wpa_supplicant.service.d/override.conf, le client ignore totalement les requêtes de migration forcée de la box et conserve une liaison ininterrompue sur la bande choisie.
+
+### Le Verrouillage Matériel NoSoftRst+ et la Persistance Standby
+L'inspection du bus PCIe (lspci -vvv -s 00:14.3) a mis en évidence le drapeau matériel :
+\`\`\`text
+Capabilities: [c8] Power Management version 3
+    Status: D0 NoSoftRst+
+\`\`\`
+Ce bit NoSoftRst+ indique que la puce préserve son contexte interne lors des transitions logicielles. Lorsque le processeur interne LMAC se fige à 0xd0, un simple redémarrage logiciel (sudo reboot) ne coupe PAS l'alimentation de la puce si le chargeur secteur est branché : la ligne 3.3V Always-On maintient l'état figé.
+Pour déverrouiller la puce après un tel gel :
+1. Soit utiliser le trou d'épingle de reset d'urgence sous le châssis ThinkPad (15 secondes avec un trombone).
+2. Soit débrancher le chargeur secteur et l'USB, éteindre le PC (poweroff), et maintenir le bouton Power enfoncé pendant 30 secondes pour drainer les condensateurs résiduels.
