@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Wi-Fi Self-Healing Watchdog every 30s
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
