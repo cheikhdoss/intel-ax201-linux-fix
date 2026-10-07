@@ -1,6 +1,7 @@
 #!/bin/bash
 # Self-healing watchdog for Intel AX201 CNVi Wi-Fi
-# Rate-limited to max 5 recovery attempts with a fast 60s cooldown
+# Only intervenes if interface has physically disappeared or driver is failed/unavailable.
+# NEVER triggers on internet/WAN packet loss.
 
 LOCKFILE="/tmp/wifi-autoheal-state"
 NOW=$(date +%s)
@@ -17,39 +18,30 @@ fi
 if nmcli radio wifi 2>/dev/null | grep -q -E "activé|enabled"; then
     NEED_HEAL=0
     
-    # Check 1: Interface missing completely
+    # Check 1: Interface missing completely from system
     if ! ip link show wlp0s20f3 >/dev/null 2>&1; then
         NEED_HEAL=1
-    # Check 2: Interface marked unavailable in NetworkManager
+    # Check 2: Interface marked unavailable in NetworkManager (driver initialization failed)
     elif nmcli dev status 2>/dev/null | grep -E "wlp0s20f3|wlan0" | grep -q -E "indisponible|unavailable"; then
         NEED_HEAL=1
-    # Check 3: Connected but unresponsive to traffic (hardware wedged)
-    elif nmcli dev status 2>/dev/null | grep -E "wlp0s20f3|wlan0" | grep -q -E "connecté|connected"; then
-        if ! ping -I wlp0s20f3 -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
-            sleep 2
-            if ! ping -I wlp0s20f3 -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
-                NEED_HEAL=1
-            fi
-        fi
     fi
 
     if [ "$NEED_HEAL" -eq 1 ]; then
-        # Read state: timestamp and counter
         LAST_TIME=0
         COUNT=0
         if [ -f "$LOCKFILE" ]; then
             read LAST_TIME COUNT < "$LOCKFILE"
         fi
 
-        # Reset counter if older than 60s (1 minute)
-        if [ $((NOW - LAST_TIME)) -gt 60 ]; then
+        # Reset counter if older than 120s (2 minutes)
+        if [ $((NOW - LAST_TIME)) -gt 120 ]; then
             COUNT=0
         fi
 
-        if [ "$COUNT" -lt 5 ]; then
+        if [ "$COUNT" -lt 3 ]; then
             COUNT=$((COUNT + 1))
             echo "$NOW $COUNT" > "$LOCKFILE"
-            logger -t wifi-autoheal "Wi-Fi failure detected. Attempt $COUNT/5: Triggering PCIe hot reset."
+            logger -t wifi-autoheal "Wi-Fi hardware missing or unavailable. Attempt $COUNT/3: Triggering PCIe hot reset."
             
             if [ -d "/sys/bus/pci/devices/0000:00:14.3" ]; then
                 echo 1 > /sys/bus/pci/devices/0000:00:14.3/remove 2>/dev/null || true
@@ -65,10 +57,10 @@ if nmcli radio wifi 2>/dev/null | grep -q -E "activé|enabled"; then
             systemctl restart wpa_supplicant 2>/dev/null || true
             logger -t wifi-autoheal "PCIe hot reset attempt $COUNT completed."
         else
-            logger -t wifi-autoheal "Max recovery attempts (5) reached. Fast 60s cooldown before next retry."
+            logger -t wifi-autoheal "Max recovery attempts (3) reached. Cooldown in progress."
         fi
     else
-        # Wi-Fi is healthy, clear failure counter
+        # Wi-Fi is present and managed, clear failure counter
         rm -f "$LOCKFILE"
     fi
 fi
