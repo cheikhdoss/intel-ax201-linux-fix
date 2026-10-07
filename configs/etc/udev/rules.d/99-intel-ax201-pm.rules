@@ -1,0 +1,2 @@
+# Prevent PCIe runtime power management sleep on Intel AX201 CNVi
+ACTION=="add|change", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x02f0", ATTR{power/control}="on"
