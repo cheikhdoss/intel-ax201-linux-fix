@@ -1,6 +1,6 @@
 #!/bin/bash
 # Self-healing watchdog for Intel AX201 CNVi Wi-Fi
-# Rate-limited to max 3 recovery attempts per 5 minutes
+# Rate-limited to max 5 recovery attempts with a fast 60s cooldown
 
 LOCKFILE="/tmp/wifi-autoheal-state"
 NOW=$(date +%s)
@@ -41,15 +41,15 @@ if nmcli radio wifi 2>/dev/null | grep -q -E "activé|enabled"; then
             read LAST_TIME COUNT < "$LOCKFILE"
         fi
 
-        # Reset counter if older than 300s (5 minutes)
-        if [ $((NOW - LAST_TIME)) -gt 300 ]; then
+        # Reset counter if older than 60s (1 minute)
+        if [ $((NOW - LAST_TIME)) -gt 60 ]; then
             COUNT=0
         fi
 
-        if [ "$COUNT" -lt 3 ]; then
+        if [ "$COUNT" -lt 5 ]; then
             COUNT=$((COUNT + 1))
             echo "$NOW $COUNT" > "$LOCKFILE"
-            logger -t wifi-autoheal "Wi-Fi failure detected. Attempt $COUNT/3: Triggering PCIe hot reset."
+            logger -t wifi-autoheal "Wi-Fi failure detected. Attempt $COUNT/5: Triggering PCIe hot reset."
             
             if [ -d "/sys/bus/pci/devices/0000:00:14.3" ]; then
                 echo 1 > /sys/bus/pci/devices/0000:00:14.3/remove 2>/dev/null || true
@@ -65,7 +65,7 @@ if nmcli radio wifi 2>/dev/null | grep -q -E "activé|enabled"; then
             systemctl restart wpa_supplicant 2>/dev/null || true
             logger -t wifi-autoheal "PCIe hot reset attempt $COUNT completed."
         else
-            logger -t wifi-autoheal "Max recovery attempts (3) reached. Awaiting cooldown."
+            logger -t wifi-autoheal "Max recovery attempts (5) reached. Fast 60s cooldown before next retry."
         fi
     else
         # Wi-Fi is healthy, clear failure counter
